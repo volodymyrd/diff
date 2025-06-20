@@ -41,12 +41,17 @@ pub fn myers_diff(a: &[char], b: &[char]) -> (usize, Vec<DiffOperation>) {
     }
 
     let mut path = vec![];
-    let min_edit_dist = conquer(a, b, 0, &mut path);
+    let max_d = max_d(a.len(), b.len());
+    let mut vf = V::new(max_d);
+    let mut vr = V::new(max_d);
+    let min_edit_dist = conquer(a, b, &mut vf, &mut vr, &mut path);
 
     (min_edit_dist, path)
 }
 
-fn conquer(a: &[char], b: &[char], min_edit_dist: usize, path: &mut Vec<DiffOperation>) -> usize {
+fn conquer(a: &[char], b: &[char], vf: &mut V, vr: &mut V, path: &mut Vec<DiffOperation>) -> usize {
+    let mut min_edit_dist = 0;
+
     // Check for common prefix
     let common_prefix_len = common_prefix_len(a, b);
     if common_prefix_len > 0 {
@@ -92,6 +97,22 @@ fn conquer(a: &[char], b: &[char], min_edit_dist: usize, path: &mut Vec<DiffOper
             path.append(&mut tmp_path);
         }
         return min_edit_dist + a.len();
+    }
+
+    if let Some((x_start, y_start, x_end, y_end)) = find_middle_snake(a, b, vf, vr) {
+        min_edit_dist += conquer(&a[..x_start], &b[..y_start], vf, vr, path);
+        for &c in &a[x_start..x_end] {
+            path.push(DiffOperation::Match(c));
+        }
+        min_edit_dist += conquer(&a[x_end..], &b[y_end..], vf, vr, path);
+    } else {
+        for &c in a {
+            path.push(DiffOperation::Deletion(c));
+        }
+        for &c in b {
+            path.push(DiffOperation::Insertion(c));
+        }
+        min_edit_dist += a.len() + b.len();
     }
 
     if !tmp_path.is_empty() {
@@ -174,8 +195,15 @@ fn max_d(n: usize, m: usize) -> usize {
     (n + m + 1) / 2
 }
 
+/// Finds the middle snake, returning (x_start, y_start, x_end, y_end) of the snake.
+///
 /// See the 4b. A Linear Space Refinement http://www.xmailserver.org/diff2.pdf.
-fn find_middle_snake(a: &[char], b: &[char], vf: &mut V, vr: &mut V) -> Option<(usize, usize)> {
+fn find_middle_snake(
+    a: &[char],
+    b: &[char],
+    vf: &mut V,
+    vr: &mut V,
+) -> Option<(usize, usize, usize, usize)> {
     let n = a.len();
     let m = b.len();
 
@@ -189,9 +217,9 @@ fn find_middle_snake(a: &[char], b: &[char], vf: &mut V, vr: &mut V) -> Option<(
     // 10 => 0x1010 & 0x0001 = 0x000 = 0 => false
     let is_delta_odd = (delta & 1) == 1;
 
-    // V[1] ← 0
-    vf[1] = 0;
-    vr[1] = 0;
+    // Resetting V arrays for each find_middle_snake call.
+    vf.v.fill(0);
+    vr.v.fill(0);
 
     // We only need to explore the floor of the average [(a.len + b.len)/2].
     let d_max = max_d(n, m);
@@ -207,7 +235,7 @@ fn find_middle_snake(a: &[char], b: &[char], vf: &mut V, vr: &mut V) -> Option<(
                 vf[k - 1] + 1
             };
             // y ← x − k
-            let y = (x as isize - k) as usize;
+            let mut y = (x as isize - k) as usize;
 
             // The coordinate of the start of a snake
             let (x0, y0) = (x, y);
@@ -215,7 +243,9 @@ fn find_middle_snake(a: &[char], b: &[char], vf: &mut V, vr: &mut V) -> Option<(
             // While these sequences are identical, keep moving through the graph with no cost:
             // While x < N and y < M and a x + 1 = by + 1 Do (x,y) ← (x+1,y+1)
             if x < n && y < m {
-                x += common_prefix_len(&a[x..], &b[y..]);
+                let common_prefix_len = common_prefix_len(&a[x..], &b[y..]);
+                x += common_prefix_len;
+                y += common_prefix_len;
             }
 
             // This is the new best x value: V[k] ← x
@@ -236,22 +266,23 @@ fn find_middle_snake(a: &[char], b: &[char], vf: &mut V, vr: &mut V) -> Option<(
                 // kr=xr-yr=n-x-m+y=n-m-(x-y)=∆-k
                 && vf[k] + vr[delta-k] >= n
             {
-                return Some((x0, y0));
+                return Some((x0, y0, x, y));
             }
         }
 
         // Reverse path (Simulating Reverse as Forward)
         for k in (-d..=d).step_by(2) {
             // Find the end of the furthest reaching reverse D-path in diagonal k+∆.
-            let kr = k + delta;
-            let mut x = if kr == -d || kr != d && vr[kr - 1] < vr[kr + 1] {
-                vr[kr + 1]
+            let mut x = if k == -d || k != d && vr[k - 1] < vr[k + 1] {
+                vr[k + 1]
             } else {
-                vr[kr - 1] + 1
+                vr[k - 1] + 1
             };
 
             // y ← x - kr
-            let mut y = (x as isize - kr) as usize;
+            let mut y = (x as isize - k) as usize;
+
+            let (x_end, y_end) = (n - x, m - y);
 
             if x < n && y < m {
                 let suffix_len = common_suffix_len(&a[..n - x], &b[..m - y]);
@@ -260,14 +291,14 @@ fn find_middle_snake(a: &[char], b: &[char], vf: &mut V, vr: &mut V) -> Option<(
             }
 
             // This is the new best x value: V[kr] ← x
-            vr[kr] = x;
+            vr[k] = x;
 
             // If ∆ is even and kr=k + ∆ ∈ [−D,D] Then
             //  If the path overlaps the furthest reaching forward D-path in diagonal k+∆ Then
             //   Length of an SES is 2D
             //   The last snake of the reverse path is the middle snake.
-            if !is_delta_odd && kr >= -d && kr <= d && vr[kr] + vf[-k] >= n {
-                return Some((n - x, m - y));
+            if !is_delta_odd && k >= -d && k <= d && vr[k] + vf[delta - k] >= n {
+                return Some((n - x, m - y, x_end, y_end));
             }
         }
     }
@@ -376,46 +407,39 @@ mod tests {
     fn test_myers_diff_common_suffix_middle_differs_stubbed() {
         let a = string_to_char_vec("labca");
         let b = string_to_char_vec("fabca");
+
         let (distance, path) = myers_diff(&a, &b);
-        assert_eq!(distance, 0);
-        assert_eq!(path.len(), 4);
-        assert_eq!(path[0], DiffOperation::Match('a'));
-        assert_eq!(path[1], DiffOperation::Match('b'));
-        assert_eq!(path[2], DiffOperation::Match('c'));
-        assert_eq!(path[3], DiffOperation::Match('a'));
+
+        assert_eq!(distance, 2);
+        assert_eq!(path.len(), 6);
+        assert_eq!(path[0], DiffOperation::Deletion('l'));
+        assert_eq!(path[1], DiffOperation::Insertion('f'));
+        assert_eq!(path[2], DiffOperation::Match('a'));
+        assert_eq!(path[3], DiffOperation::Match('b'));
+        assert_eq!(path[4], DiffOperation::Match('c'));
+        assert_eq!(path[5], DiffOperation::Match('a'));
     }
 
-    // #[test]
-    // fn test_myers_diff_example_1() {
-    //     let a = string_to_char_vec("abcabba");
-    //     let b = string_to_char_vec("cbabac");
-    //     let (distance, path) = myers_diff(&a, &b);
-    //     assert_eq!(distance, 5);
-    //
-    //     // Expected path:
-    //     // Del A[0]='a' -> (0,0) -> (1,0)
-    //     // Del A[1]='b' -> (1,0) -> (2,0)
-    //     // Match A[2]='c' B[0]='c' -> (2,0) -> (3,1)
-    //     // Ins B[1]='b' -> (3,1) -> (3,2)
-    //     // Match A[3]='a' B[2]='a' -> (3,2) -> (4,3)
-    //     // Match A[4]='b' B[3]='b' -> (4,3) -> (5,4)
-    //     // Del A[5]='b' -> (5,4) -> (6,4)
-    //     // Match A[6]='a' B[4]='a' -> (6,4) -> (7,5)
-    //     // Ins B[5]='c' -> (7,5) -> (7,6)
-    //     // Total ops: 5 edits + 4 matches = 9 operations.
-    //     assert_eq!(path.len(), 9);
-    //
-    //     // Assert specific operations. Order matters for correctness of path.
-    //     assert_eq!(path[0], DiffOperation::Deletion('a'));
-    //     assert_eq!(path[1], DiffOperation::Deletion('b'));
-    //     assert_eq!(path[2], DiffOperation::Match('c'));
-    //     assert_eq!(path[3], DiffOperation::Insertion('b'));
-    //     assert_eq!(path[4], DiffOperation::Match('a'));
-    //     assert_eq!(path[5], DiffOperation::Match('b'));
-    //     assert_eq!(path[6], DiffOperation::Deletion('b'));
-    //     assert_eq!(path[7], DiffOperation::Match('a'));
-    //     assert_eq!(path[8], DiffOperation::Insertion('c'));
-    // }
+    #[test]
+    fn test_myers_diff_example_1() {
+        let a = string_to_char_vec("abcabba");
+        let b = string_to_char_vec("cbabac");
+
+        let (distance, path) = myers_diff(&a, &b);
+
+        assert_eq!(distance, 5);
+        // Total ops: 5 edits + 4 matches = 9 operations.
+        assert_eq!(path.len(), 9);
+        assert_eq!(path[0], DiffOperation::Deletion('a'));
+        assert_eq!(path[1], DiffOperation::Insertion('c'));
+        assert_eq!(path[2], DiffOperation::Match('b'));
+        assert_eq!(path[3], DiffOperation::Deletion('c'));
+        assert_eq!(path[4], DiffOperation::Match('a'));
+        assert_eq!(path[5], DiffOperation::Match('b'));
+        assert_eq!(path[6], DiffOperation::Deletion('b'));
+        assert_eq!(path[7], DiffOperation::Match('a'));
+        assert_eq!(path[8], DiffOperation::Insertion('c'));
+    }
 
     #[test]
     fn test_common_prefix_len_both_empty() {
@@ -580,64 +604,60 @@ mod tests {
 
     #[test]
     fn test_find_middle_snake_empty_strings() {
-        let a = string_to_char_vec("");
-        let b = string_to_char_vec("");
-        let max_d = max_d(a.len(), b.len());
-        let mut vf = V::new(max_d);
-        let mut vr = V::new(max_d);
-
-        let res = find_middle_snake(&a, &b, &mut vf, &mut vr);
-
-        assert!(res.is_none(), "Empty strings should return None");
+        let (a, b, mut vf, mut vr) = init_test_find_middle_snake("", "");
+        assert_eq!(find_middle_snake(&a, &b, &mut vf, &mut vr), None);
     }
 
     #[test]
-    fn est_find_middle_snake_identical_strings() {
-        let a = string_to_char_vec("abcde");
-        let b = string_to_char_vec("abcde");
-        let max_d = max_d(a.len(), b.len());
-        let mut vf = V::new(max_d);
-        let mut vr = V::new(max_d);
-
-        let res = find_middle_snake(&a, &b, &mut vf, &mut vr);
-
-        assert!(
-            res.is_some(),
-            "Identical strings should have a middle snake"
+    fn test_find_middle_snake_identical_strings() {
+        let (a, b, mut vf, mut vr) = init_test_find_middle_snake("abcde", "abcde");
+        assert_eq!(
+            find_middle_snake(&a, &b, &mut vf, &mut vr),
+            Some((0, 0, 5, 5))
         );
-        let (x, y) = res.unwrap();
-        assert_eq!(x, 0);
-        assert_eq!(y, 0);
+    }
+
+    #[test]
+    fn test_find_middle_snake_long_identical_strings() {
+        let (a, b, mut vf, mut vr) =
+            init_test_find_middle_snake("longidenticalstring", "longidenticalstring");
+        assert_eq!(
+            find_middle_snake(&a, &b, &mut vf, &mut vr),
+            Some((0, 0, 19, 19))
+        );
     }
 
     #[test]
     fn test_find_middle_snake_completely_different() {
-        let a = string_to_char_vec("aaaaa");
-        let b = string_to_char_vec("bbbbb");
-        let max_d = max_d(a.len(), b.len());
-        let mut vf = V::new(max_d);
-        let mut vr = V::new(max_d);
+        let (a, b, mut vf, mut vr) = init_test_find_middle_snake("aaaaa", "bbbbb");
+        assert_eq!(find_middle_snake(&a, &b, &mut vf, &mut vr), None);
+    }
 
-        let res = find_middle_snake(&a, &b, &mut vf, &mut vr);
-        // No common snake
-        assert!(
-            res.is_none(),
-            "Completely different strings should not find a middle snake"
+    #[test]
+    fn test_find_middle_snake_simple_edit() {
+        let (a, b, mut vf, mut vr) = init_test_find_middle_snake("BC", "XBC");
+        assert_eq!(
+            find_middle_snake(&a, &b, &mut vf, &mut vr),
+            Some((0, 1, 2, 3))
         );
     }
 
     #[test]
     fn test_find_middle_snake() {
-        let a = string_to_char_vec("ABCABBA");
-        let b = string_to_char_vec("CBABAC");
+        let (a, b, mut vf, mut vr) = init_test_find_middle_snake("ABCABBA", "CBABAC");
+        assert_eq!(
+            find_middle_snake(&a, &b, &mut vf, &mut vr),
+            Some((3, 2, 5, 4))
+        );
+    }
+
+    fn init_test_find_middle_snake(a: &str, b: &str) -> (Vec<char>, Vec<char>, V, V) {
+        let a = string_to_char_vec(a);
+        let b = string_to_char_vec(b);
         let max_d = max_d(a.len(), b.len());
-        let mut vf = V::new(max_d);
-        let mut vb = V::new(max_d);
-
-        let (x_start, y_start) = find_middle_snake(&a, &b, &mut vf, &mut vb).unwrap();
-
-        assert_eq!(x_start, 4);
-        assert_eq!(y_start, 6);
+        let vf = V::new(max_d);
+        let vb = V::new(max_d);
+        (a, b, vf, vb)
     }
 
     fn string_to_char_vec(s: &str) -> Vec<char> {
