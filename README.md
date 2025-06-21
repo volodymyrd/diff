@@ -25,6 +25,8 @@ Eugene W. Myers's paper, *"An O(ND) Difference Algorithm and Its Variations"*.
 
 The key ideas are:
 
+![](MYERS.png)
+
 1. **Edit Graph**: The problem is modeled as finding the shortest path on an "edit graph" where horizontal edges
    represent deletions, vertical edges represent insertions, and diagonal edges represent matches.
 2. **Furthest-Reaching D-Paths**: Instead of filling a full `(N+1)x(M+1)` matrix, the algorithm only searches for the
