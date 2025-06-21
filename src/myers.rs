@@ -192,7 +192,7 @@ impl IndexMut<isize> for V {
 }
 
 fn max_d(n: usize, m: usize) -> usize {
-    (n + m + 1) / 2
+    (n + m).div_ceil(2)
 }
 
 /// Finds the middle snake, returning (x_start, y_start, x_end, y_end) of the snake.
